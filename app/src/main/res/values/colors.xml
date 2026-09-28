@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="voxa_bg_dark">#0E1013</color>
+    <color name="voxa_surface_dark">#181B20</color>
+    <color name="voxa_accent_blue">#3D8BFF</color>
+</resources>

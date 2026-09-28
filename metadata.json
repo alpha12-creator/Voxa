@@ -1,0 +1,6 @@
+{
+  "name": "VOXA",
+  "description": "Private, lightweight, and modern SMS messaging app.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
