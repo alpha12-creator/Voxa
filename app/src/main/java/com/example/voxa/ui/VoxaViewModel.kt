@@ -24,15 +24,15 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 enum class VoxaTab {
-    MESSAGES, ARCHIVE, BIN, STARRED, SPAM_BLOCKED, SETTINGS
+    MESSAGES, ARCHIVE, BIN, STARRED, SPAM_BLOCKED, SCHEDULED, QUICK_REPLIES, SETTINGS
 }
 
 enum class CategoryFilter(val label: String) {
     ALL("All"),
+    UNREAD("Unread"),
     PERSONAL("Personal"),
-    OTP("OTP / Codes"),
     TRANSACTIONS("Transactions"),
-    UNREAD("Unread")
+    OTP("OTP / Codes")
 }
 
 class VoxaViewModel(application: Application) : AndroidViewModel(application) {
@@ -58,6 +58,16 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _starredMessages = MutableStateFlow<List<Pair<Conversation, Message>>>(emptyList())
     val starredMessages: StateFlow<List<Pair<Conversation, Message>>> = _starredMessages.asStateFlow()
+
+    private val _scheduledMessages = MutableStateFlow<List<Pair<Conversation, Message>>>(emptyList())
+    val scheduledMessages: StateFlow<List<Pair<Conversation, Message>>> = _scheduledMessages.asStateFlow()
+
+    private val _messageSearchResults = MutableStateFlow<List<Pair<Conversation, Message>>>(emptyList())
+    val messageSearchResults: StateFlow<List<Pair<Conversation, Message>>> = _messageSearchResults.asStateFlow()
+
+    // Multi-selection state
+    private val _selectedConversationIds = MutableStateFlow<Set<Long>>(emptySet())
+    val selectedConversationIds: StateFlow<Set<Long>> = _selectedConversationIds.asStateFlow()
 
     val currentMessages: StateFlow<List<Message>> = repository.currentMessages
 
@@ -106,7 +116,12 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
             .sortedByDescending { it.lastMessageTime }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // Stats and Counts for badges in three-dots menu
+    // Unread count
+    val unreadCount: StateFlow<Int> = repository.conversations.map { list ->
+        list.count { !it.isArchived && !it.isDeleted && !it.isBlocked && it.unread }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    // Archive count
     val archiveCount: StateFlow<Int> = repository.conversations.map { list ->
         list.count { it.isArchived && !it.isDeleted }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
@@ -183,9 +198,12 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
         _openConversationId.value = null
         _isSearchVisible.value = false
         _searchQuery.value = ""
+        clearSelection()
         repository.closeConversation()
         if (tab == VoxaTab.STARRED) {
             loadStarredMessages()
+        } else if (tab == VoxaTab.SCHEDULED) {
+            loadScheduledMessages()
         }
     }
 
@@ -193,14 +211,23 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
         _isSearchVisible.value = !_isSearchVisible.value
         if (!_isSearchVisible.value) {
             _searchQuery.value = ""
+            _messageSearchResults.value = emptyList()
         }
     }
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+        if (query.isNotBlank()) {
+            viewModelScope.launch {
+                _messageSearchResults.value = repository.searchMessagesContent(query.trim())
+            }
+        } else {
+            _messageSearchResults.value = emptyList()
+        }
     }
 
     fun openConversation(id: Long) {
+        clearSelection()
         _openConversationId.value = id
         repository.openConversation(id)
     }
@@ -227,6 +254,10 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
         repository.sendMessage(convId, text, type, dataUri, fileName, fileSize, contactName, contactNumber)
     }
 
+    fun resendMessage(msgId: Long) {
+        repository.resendMessage(msgId)
+    }
+
     fun scheduleMessage(convId: Long, text: String, scheduledTime: Long) {
         repository.scheduleMessage(convId, text, scheduledTime)
     }
@@ -236,6 +267,7 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
         openConversation(id)
     }
 
+    // Single item actions
     fun togglePin(id: Long) = repository.togglePin(id)
     fun toggleMute(id: Long) = repository.toggleMute(id)
     fun toggleUnread(id: Long) = repository.toggleUnread(id)
@@ -253,6 +285,78 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteMessage(msgId: Long, convId: Long) = repository.deleteMessage(msgId, convId)
     fun clearConversation(convId: Long) = repository.clearConversation(convId)
     fun markAllAsRead() = repository.markAllAsRead()
+
+    // Multi-selection actions
+    fun toggleSelectConversation(id: Long) {
+        val current = _selectedConversationIds.value
+        _selectedConversationIds.value = if (current.contains(id)) {
+            current - id
+        } else {
+            current + id
+        }
+    }
+
+    fun selectAll(conversations: List<Conversation>) {
+        _selectedConversationIds.value = conversations.map { it.id }.toSet()
+    }
+
+    fun clearSelection() {
+        _selectedConversationIds.value = emptySet()
+    }
+
+    fun archiveSelected() {
+        val ids = _selectedConversationIds.value.toList()
+        if (ids.isNotEmpty()) {
+            repository.archiveMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun moveToBinSelected() {
+        val ids = _selectedConversationIds.value.toList()
+        if (ids.isNotEmpty()) {
+            repository.moveToBinMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun restoreFromBinSelected() {
+        val ids = _selectedConversationIds.value.toList()
+        if (ids.isNotEmpty()) {
+            repository.restoreFromBinMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun restoreFromBinMultiple(ids: List<Long>) {
+        if (ids.isNotEmpty()) {
+            repository.restoreFromBinMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun deletePermanentlySelected() {
+        val ids = _selectedConversationIds.value.toList()
+        if (ids.isNotEmpty()) {
+            repository.deletePermanentlyMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun deletePermanentlyMultiple(ids: List<Long>) {
+        if (ids.isNotEmpty()) {
+            repository.deletePermanentlyMultiple(ids)
+            clearSelection()
+        }
+    }
+
+    fun markSelectedAsRead() {
+        val ids = _selectedConversationIds.value.toList()
+        if (ids.isNotEmpty()) {
+            repository.markMultipleAsRead(ids)
+            clearSelection()
+        }
+    }
 
     fun syncDeviceMessages() {
         viewModelScope.launch {
@@ -272,6 +376,28 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadScheduledMessages() {
+        viewModelScope.launch {
+            _scheduledMessages.value = repository.getScheduledMessages()
+        }
+    }
+
+    fun sendScheduledMessageNow(msgId: Long) {
+        repository.sendScheduledMessageNow(msgId)
+        loadScheduledMessages()
+    }
+
+    fun cancelScheduledMessage(msgId: Long, convId: Long) {
+        repository.cancelScheduledMessage(msgId, convId)
+        loadScheduledMessages()
+    }
+
+    // Quick Replies
+    fun getQuickReplies(): List<String> = preferences.getQuickReplies()
+    fun addQuickReply(reply: String) = preferences.addQuickReply(reply)
+    fun removeQuickReply(reply: String) = preferences.removeQuickReply(reply)
+    fun resetQuickRepliesToDefault() = preferences.resetQuickRepliesToDefault()
+
     // Settings
     fun setThemeMode(mode: ThemeMode) = preferences.setThemeMode(mode)
     fun setAccentColor(accent: AccentColor) = preferences.setAccentColor(accent)
@@ -279,4 +405,5 @@ class VoxaViewModel(application: Application) : AndroidViewModel(application) {
     fun setBinRetentionDays(days: Int) = preferences.setBinRetentionDays(days)
     fun setNotificationsEnabled(enabled: Boolean) = preferences.setNotificationsEnabled(enabled)
     fun setHideMessagePreview(enabled: Boolean) = preferences.setHideMessagePreview(enabled)
+    fun setDeliveryReportsEnabled(enabled: Boolean) = preferences.setDeliveryReportsEnabled(enabled)
 }

@@ -5,7 +5,7 @@ enum class MessageDirection {
 }
 
 enum class MessageStatus {
-    PENDING, SENT, DELIVERED, READ, FAILED, SCHEDULED
+    SENDING, PENDING, SENT, DELIVERED, READ, FAILED, SCHEDULED
 }
 
 enum class MessageType {

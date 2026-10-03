@@ -21,14 +21,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ChatBubbleOutline
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MarkChatRead
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -69,6 +75,13 @@ fun InboxScreen(
     onArchive: (Long) -> Unit,
     onMoveToBin: (Long) -> Unit,
     onToggleBlock: (Long) -> Unit,
+    selectedConversationIds: Set<Long> = emptySet(),
+    onToggleSelectConversation: (Long) -> Unit = {},
+    onSelectAll: (List<Conversation>) -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onArchiveSelected: () -> Unit = {},
+    onMoveToBinSelected: () -> Unit = {},
+    onMarkSelectedAsRead: () -> Unit = {},
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
     onSyncDeviceMessages: () -> Unit = {},
@@ -78,113 +91,160 @@ fun InboxScreen(
     var selectedConvForMenu by remember { mutableStateOf<Conversation?>(null) }
     var showNewConvDialog by remember { mutableStateOf(false) }
 
+    val isSelectionMode = selectedConversationIds.isNotEmpty()
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(colors.bg)
     ) {
-        // Search Bar at the top of the conversation list screen
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = onSearchQueryChange,
-            placeholder = {
-                Text(
-                    text = "Search name or phone number...",
-                    fontSize = 14.sp,
-                    color = colors.textSecondary
-                )
-            },
-            leadingIcon = {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Search contacts",
-                    tint = if (searchQuery.isNotBlank()) colors.accent else colors.textSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(
-                        onClick = { onSearchQueryChange("") },
-                        modifier = Modifier.testTag("clear_search_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Clear search",
-                            tint = colors.textSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(24.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedTextColor = colors.text,
-                unfocusedTextColor = colors.text,
-                focusedBorderColor = colors.accent,
-                unfocusedBorderColor = Color.Transparent,
-                focusedContainerColor = colors.surface2,
-                unfocusedContainerColor = colors.surface2
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
-                .testTag("conversation_search_bar")
-        )
-
-        // Matching contacts indicator when search query is active
-        if (searchQuery.isNotBlank() && conversations.isNotEmpty()) {
+        if (isSelectionMode) {
+            // Multi-Selection Action Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 18.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .background(colors.surface)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "${conversations.size} matching contact${if (conversations.size == 1) "" else "s"}",
-                    color = colors.accent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "Clear",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clickable { onSearchQueryChange("") }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
-            }
-        }
-
-        // Horizontal Category Filter Chips (Google Messages style)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            CategoryFilter.entries.forEach { cat ->
-                val isSelected = selectedCategory == cat
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(if (isSelected) colors.accent else colors.surface2)
-                        .clickable { onSelectCategory(cat) }
-                        .padding(horizontal = 14.dp, vertical = 7.dp)
-                        .testTag("filter_chip_${cat.name.lowercase()}"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = cat.label,
-                        color = if (isSelected) colors.accentText else colors.textSecondary,
-                        fontSize = 12.5.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                IconButton(onClick = onClearSelection, modifier = Modifier.testTag("clear_selection_btn")) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Clear selection",
+                        tint = colors.text
                     )
+                }
+
+                Text(
+                    text = "${selectedConversationIds.size} selected",
+                    color = colors.text,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+
+                IconButton(
+                    onClick = { onSelectAll(conversations) },
+                    modifier = Modifier.testTag("select_all_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SelectAll,
+                        contentDescription = "Select all",
+                        tint = colors.textSecondary
+                    )
+                }
+
+                IconButton(
+                    onClick = onMarkSelectedAsRead,
+                    modifier = Modifier.testTag("mark_read_selected_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MarkChatRead,
+                        contentDescription = "Mark as read",
+                        tint = colors.textSecondary
+                    )
+                }
+
+                IconButton(
+                    onClick = onArchiveSelected,
+                    modifier = Modifier.testTag("archive_selected_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Archive,
+                        contentDescription = "Archive selected",
+                        tint = colors.textSecondary
+                    )
+                }
+
+                IconButton(
+                    onClick = onMoveToBinSelected,
+                    modifier = Modifier.testTag("bin_selected_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Move selected to Bin",
+                        tint = colors.danger
+                    )
+                }
+            }
+            HorizontalDivider(color = colors.border, thickness = 0.5.dp)
+        } else {
+            // Search Input Field
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = {
+                    Text(
+                        text = "Search conversations or contacts...",
+                        fontSize = 14.sp,
+                        color = colors.textSecondary
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = if (searchQuery.isNotBlank()) colors.accent else colors.textSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onSearchQueryChange("") },
+                            modifier = Modifier.testTag("clear_search_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = colors.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(24.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = colors.text,
+                    unfocusedTextColor = colors.text,
+                    focusedBorderColor = colors.accent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = colors.surface2,
+                    unfocusedContainerColor = colors.surface2
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .testTag("conversation_search_bar")
+            )
+
+            // Category Chips: All, Unread, Personal, Transactions, OTP
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CategoryFilter.entries.forEach { cat ->
+                    val isSelected = selectedCategory == cat
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(if (isSelected) colors.accent else colors.surface2)
+                            .clickable { onSelectCategory(cat) }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                            .testTag("filter_chip_${cat.name.lowercase()}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = cat.label,
+                            color = if (isSelected) colors.accentText else colors.textSecondary,
+                            fontSize = 12.5.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -211,7 +271,7 @@ fun InboxScreen(
                         )
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
-                            text = "No contacts or numbers found",
+                            text = "No messages found",
                             color = colors.text,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
@@ -219,11 +279,10 @@ fun InboxScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "No conversation matching \"$searchQuery\".\nCheck the spelling or try searching by digits.",
+                            text = "No conversations match \"$searchQuery\".",
                             color = colors.textSecondary,
                             fontSize = 13.5.sp,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp
+                            textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(
@@ -235,11 +294,7 @@ fun InboxScreen(
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier.testTag("empty_search_clear_btn")
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Clear Search", fontSize = 13.sp)
                         }
@@ -255,14 +310,24 @@ fun InboxScreen(
                             text = if (selectedCategory != CategoryFilter.ALL)
                                 "No messages in ${selectedCategory.label}"
                             else
-                                "No conversations yet.\nTap + to start a conversation.",
+                                "No messages yet",
+                            color = colors.text,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (selectedCategory != CategoryFilter.ALL)
+                                "Conversations matching ${selectedCategory.label} will appear here."
+                            else
+                                "Tap + to start a new conversation.",
                             color = colors.textSecondary,
-                            fontSize = 14.5.sp,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 20.sp
+                            fontSize = 13.5.sp,
+                            textAlign = TextAlign.Center
                         )
                         if (selectedCategory == CategoryFilter.ALL) {
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(18.dp))
                             Button(
                                 onClick = onSyncDeviceMessages,
                                 colors = ButtonDefaults.buttonColors(
@@ -290,15 +355,31 @@ fun InboxScreen(
                         .testTag("inbox_list")
                 ) {
                     items(conversations, key = { it.id }) { conv ->
+                        val isSelected = selectedConversationIds.contains(conv.id)
                         ConversationItem(
                             conversation = conv,
-                            onClick = { onOpenConversation(conv.id) },
-                            onLongClick = { selectedConvForMenu = conv }
+                            onClick = {
+                                if (isSelectionMode) {
+                                    onToggleSelectConversation(conv.id)
+                                } else {
+                                    onOpenConversation(conv.id)
+                                }
+                            },
+                            onLongClick = {
+                                if (isSelectionMode) {
+                                    onToggleSelectConversation(conv.id)
+                                } else {
+                                    selectedConvForMenu = conv
+                                }
+                            },
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected
                         )
                     }
                 }
             }
 
+            // Floating Action Button: + New Message
             FloatingActionButton(
                 onClick = { showNewConvDialog = true },
                 containerColor = colors.accent,
@@ -341,7 +422,10 @@ fun InboxScreen(
                 onMoveToBin = { onMoveToBin(conv.id) },
                 onRestoreFromBin = {},
                 onDeletePermanently = {},
-                onToggleBlock = { onToggleBlock(conv.id) }
+                onToggleBlock = { onToggleBlock(conv.id) },
+                onSelectMultiple = {
+                    onToggleSelectConversation(conv.id)
+                }
             )
         }
     }

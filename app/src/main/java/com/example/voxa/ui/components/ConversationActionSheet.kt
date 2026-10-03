@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.MarkChatRead
@@ -67,7 +68,8 @@ fun ConversationActionDialog(
     onMoveToBin: () -> Unit,
     onRestoreFromBin: () -> Unit,
     onDeletePermanently: () -> Unit,
-    onToggleBlock: () -> Unit
+    onToggleBlock: () -> Unit,
+    onSelectMultiple: () -> Unit = {}
 ) {
     val colors = LocalVoxaColors.current
     var showBlockConfirm by remember { mutableStateOf(false) }
@@ -186,6 +188,11 @@ fun ConversationActionDialog(
                         label = "Move to Bin",
                         color = colors.danger,
                         onClick = { onMoveToBin(); onDismiss() }
+                    )
+                    ActionRow(
+                        icon = Icons.Default.CheckCircle,
+                        label = "Select multiple",
+                        onClick = { onSelectMultiple(); onDismiss() }
                     )
                     ActionRow(
                         icon = Icons.Default.Block,

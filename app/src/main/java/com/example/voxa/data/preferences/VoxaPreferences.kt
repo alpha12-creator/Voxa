@@ -33,7 +33,8 @@ data class VoxaSettings(
     val keepArchivedByDefault: Boolean = false,
     val binRetentionDays: Int = 30,
     val notificationsEnabled: Boolean = true,
-    val hideMessagePreview: Boolean = false
+    val hideMessagePreview: Boolean = false,
+    val deliveryReportsEnabled: Boolean = true
 )
 
 class VoxaPreferences(context: Context) {
@@ -52,6 +53,7 @@ class VoxaPreferences(context: Context) {
         val binDays = prefs.getInt(KEY_BIN_DAYS, 30)
         val notif = prefs.getBoolean(KEY_NOTIFICATIONS, true)
         val hidePreview = prefs.getBoolean(KEY_HIDE_PREVIEW, false)
+        val deliveryReports = prefs.getBoolean(KEY_DELIVERY_REPORTS, true)
 
         return VoxaSettings(
             themeMode = themeMode,
@@ -59,8 +61,14 @@ class VoxaPreferences(context: Context) {
             keepArchivedByDefault = keepArchived,
             binRetentionDays = binDays,
             notificationsEnabled = notif,
-            hideMessagePreview = hidePreview
+            hideMessagePreview = hidePreview,
+            deliveryReportsEnabled = deliveryReports
         )
+    }
+
+    fun setDeliveryReportsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_DELIVERY_REPORTS, enabled).apply()
+        _settings.value = _settings.value.copy(deliveryReportsEnabled = enabled)
     }
 
     fun setThemeMode(mode: ThemeMode) {
@@ -121,6 +129,10 @@ class VoxaPreferences(context: Context) {
         saveQuickReplies(current)
     }
 
+    fun resetQuickRepliesToDefault() {
+        saveQuickReplies(DEFAULT_QUICK_REPLIES)
+    }
+
     companion object {
         val DEFAULT_QUICK_REPLIES = listOf(
             "Yes",
@@ -140,6 +152,7 @@ class VoxaPreferences(context: Context) {
         private const val KEY_BIN_DAYS = "bin_retention_days"
         private const val KEY_NOTIFICATIONS = "notifications_enabled"
         private const val KEY_HIDE_PREVIEW = "hide_message_preview"
+        private const val KEY_DELIVERY_REPORTS = "delivery_reports_enabled"
         private const val KEY_QUICK_REPLIES = "custom_quick_replies"
     }
 }

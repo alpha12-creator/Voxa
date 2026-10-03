@@ -38,6 +38,16 @@
             </intent-filter>
         </activity>
 
+        <!-- BroadcastReceiver for SMS Delivery and Sent Status Callbacks -->
+        <receiver
+            android:name=".sms.SmsStatusReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.voxa.SMS_SENT" />
+                <action android:name="com.example.voxa.SMS_DELIVERED" />
+            </intent-filter>
+        </receiver>
+
         <!-- BroadcastReceiver for SMS received -->
         <receiver
             android:name=".sms.SmsReceiver"

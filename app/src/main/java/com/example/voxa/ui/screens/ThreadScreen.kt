@@ -7,11 +7,9 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,7 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -38,20 +36,16 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CallEnd
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.ContactPage
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FlashOn
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Mood
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.NearMe
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -77,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,25 +80,13 @@ import com.example.voxa.data.model.Conversation
 import com.example.voxa.data.model.Message
 import com.example.voxa.data.model.MessageType
 import com.example.voxa.data.preferences.VoxaPreferences
+import com.example.voxa.sms.SmsHelper
 import com.example.voxa.ui.components.AvatarView
 import com.example.voxa.ui.components.EmojiPicker
 import com.example.voxa.ui.components.MessageBubble
 import com.example.voxa.ui.components.ScheduleDialog
 import com.example.voxa.ui.theme.LocalVoxaColors
 
-val PREDEFINED_QUICK_REPLIES = listOf(
-    "Yes",
-    "No",
-    "Talk later",
-    "OK",
-    "On my way!",
-    "Can't talk now",
-    "Call you later",
-    "Thanks!",
-    "Sounds good"
-)
-
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ThreadScreen(
     conversation: Conversation,
@@ -111,6 +94,7 @@ fun ThreadScreen(
     onBack: () -> Unit,
     onSendMessage: (text: String, type: MessageType, dataUri: String?, fileName: String?, fileSize: String?, contactName: String?, contactNumber: String?) -> Unit,
     onScheduleMessage: (text: String, scheduledTime: Long) -> Unit,
+    onResendMessage: (Long) -> Unit = {},
     onToggleStar: (msgId: Long) -> Unit,
     onDeleteMessage: (msgId: Long) -> Unit,
     onClearChatHistory: () -> Unit,
@@ -127,16 +111,12 @@ fun ThreadScreen(
     val colors = LocalVoxaColors.current
     val voxaPreferences = remember { VoxaPreferences(context) }
 
-    var quickReplies by remember { mutableStateOf(voxaPreferences.getQuickReplies()) }
-    var showQuickReplies by remember { mutableStateOf(true) }
-    var showAddQuickReplyDialog by remember { mutableStateOf(false) }
-    var newQuickReplyText by remember { mutableStateOf("") }
-
     var inputText by remember { mutableStateOf("") }
     var showEmojiPicker by remember { mutableStateOf(false) }
     var showScheduleDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showAttachMenu by remember { mutableStateOf(false) }
+    var showPlusMenu by remember { mutableStateOf(false) }
+    var showQuickReplySheet by remember { mutableStateOf(false) }
     var showContactInfoDialog by remember { mutableStateOf(false) }
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
 
@@ -187,7 +167,7 @@ fun ThreadScreen(
             .navigationBarsPadding()
             .imePadding()
     ) {
-        // Top App Bar for Thread
+        // Top Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -206,7 +186,7 @@ fun ThreadScreen(
                 )
             }
 
-            // Contact click to open details
+            // Contact header
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -215,7 +195,7 @@ fun ThreadScreen(
                     .padding(vertical = 4.dp, horizontal = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AvatarView(initials = conversation.initials, size = 38.dp)
+                AvatarView(initials = conversation.initials, size = 40.dp)
 
                 Spacer(modifier = Modifier.width(10.dp))
 
@@ -231,13 +211,13 @@ fun ThreadScreen(
                     Text(
                         text = conversation.number,
                         color = colors.textSecondary,
-                        fontSize = 11.5.sp,
+                        fontSize = 12.sp,
                         maxLines = 1
                     )
                 }
             }
 
-            // Direct Call button
+            // Call button
             IconButton(
                 onClick = {
                     val callIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${conversation.number}"))
@@ -252,7 +232,7 @@ fun ThreadScreen(
                 )
             }
 
-            // In-Chat Search button
+            // In-Chat Search
             IconButton(
                 onClick = {
                     isSearchInChatOpen = !isSearchInChatOpen
@@ -262,11 +242,12 @@ fun ThreadScreen(
             ) {
                 Icon(
                     imageVector = if (isSearchInChatOpen) Icons.Default.Close else Icons.Default.Search,
-                    contentDescription = "Search in chat",
+                    contentDescription = "Search in conversation",
                     tint = if (isSearchInChatOpen) colors.accent else colors.textSecondary
                 )
             }
 
+            // More Options Menu
             Box {
                 IconButton(
                     onClick = { showMoreMenu = true },
@@ -345,7 +326,7 @@ fun ThreadScreen(
                 onValueChange = { chatSearchQuery = it },
                 placeholder = { Text("Search in this conversation") },
                 singleLine = true,
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(10.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = colors.text,
                     unfocusedTextColor = colors.text,
@@ -363,175 +344,61 @@ fun ThreadScreen(
 
         HorizontalDivider(color = colors.border, thickness = 0.5.dp)
 
-        // Messages list
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(vertical = 8.dp)
-                .testTag("thread_messages_list")
-        ) {
-            items(filteredMessages, key = { it.id }) { msg ->
-                MessageBubble(
-                    message = msg,
-                    onToggleStar = { onToggleStar(msg.id) },
-                    onDeleteMessage = { onDeleteMessage(msg.id) }
-                )
-            }
-        }
-
-        // Quick Reply feature with pre-defined response chips (like 'Yes', 'No', 'Talk later')
-        if (showQuickReplies) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(colors.surface)
-                    .testTag("quick_reply_container")
-            ) {
-                // Header with title, add button, and dismiss toggle
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+        // Messages area with Day headers
+        Box(modifier = Modifier.weight(1f)) {
+            if (filteredMessages.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FlashOn,
-                            contentDescription = "Quick Reply",
-                            tint = colors.accent,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = "QUICK REPLY",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colors.textSecondary,
-                            letterSpacing = 0.6.sp,
-                            modifier = Modifier.testTag("quick_reply_label")
-                        )
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // "+ Add" quick reply button
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(colors.surface2)
-                                .clickable { showAddQuickReplyDialog = true }
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                .testTag("quick_reply_add_btn"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Add custom response",
-                                tint = colors.accent,
-                                modifier = Modifier.size(12.dp)
-                            )
-                            Text(
-                                text = "Add",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = colors.accent
-                            )
-                        }
-
-                        // Close/Minimize icon
-                        IconButton(
-                            onClick = { showQuickReplies = false },
-                            modifier = Modifier
-                                .size(24.dp)
-                                .testTag("quick_reply_toggle_btn")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Hide Quick Replies",
-                                tint = colors.textSecondary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        text = if (chatSearchQuery.isNotBlank()) "No messages found matching \"$chatSearchQuery\"" else "Send a message to start conversation",
+                        color = colors.textSecondary,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(24.dp)
+                    )
                 }
-
-                // Pre-defined response chips row at the bottom of the active chat view
-                Row(
+            } else {
+                LazyColumn(
+                    state = listState,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(start = 10.dp, end = 10.dp, bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxSize()
+                        .padding(vertical = 8.dp)
+                        .testTag("thread_messages_list")
                 ) {
-                    quickReplies.forEach { reply ->
-                        val lower = reply.trim().lowercase()
-                        val chipTag = when (lower) {
-                            "yes" -> "quick_reply_chip_yes"
-                            "no" -> "quick_reply_chip_no"
-                            "talk later" -> "quick_reply_chip_talk_later"
-                            else -> "quick_reply_chip_${lower.replace(" ", "_").replace("'", "").take(20)}"
+                    itemsIndexed(filteredMessages, key = { _, msg -> msg.id }) { index, msg ->
+                        // Show date separator if first message or day changed
+                        val showDateSeparator = index == 0 || !SmsHelper.isSameDay(msg.time, filteredMessages[index - 1].time)
+                        if (showDateSeparator) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(colors.surface2)
+                                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = SmsHelper.formatDateHeader(msg.time),
+                                        color = colors.textSecondary,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
                         }
 
-                        val chipIcon = when (lower) {
-                            "yes" -> Icons.Default.Check
-                            "no" -> Icons.Default.Close
-                            "talk later" -> Icons.Default.Schedule
-                            "ok" -> Icons.Default.ThumbUp
-                            "on my way!" -> Icons.Default.NearMe
-                            "can't talk now", "can't talk right now" -> Icons.Default.CallEnd
-                            "call you later" -> Icons.Default.Phone
-                            "thanks!", "thanks" -> Icons.Default.Favorite
-                            else -> Icons.Default.FlashOn
-                        }
-
-                        val iconTint = when (lower) {
-                            "yes" -> Color(0xFF34C77B)
-                            "no" -> Color(0xFFFF5C5C)
-                            "talk later" -> Color(0xFFFF9840)
-                            else -> colors.accent
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(colors.surface2)
-                                .border(0.8.dp, colors.border.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                                .combinedClickable(
-                                    onClick = {
-                                        onSendMessage(reply, MessageType.TEXT, null, null, null, null, null)
-                                        Toast.makeText(context, "Sent: \"$reply\"", Toast.LENGTH_SHORT).show()
-                                    },
-                                    onLongClick = {
-                                        inputText = reply
-                                        Toast.makeText(context, "Inserted \"$reply\" into text field", Toast.LENGTH_SHORT).show()
-                                    }
-                                )
-                                .padding(horizontal = 12.dp, vertical = 7.dp)
-                                .testTag(chipTag),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = chipIcon,
-                                contentDescription = null,
-                                tint = iconTint,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = reply,
-                                color = colors.text,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                        MessageBubble(
+                            message = msg,
+                            onToggleStar = { onToggleStar(msg.id) },
+                            onDeleteMessage = { onDeleteMessage(msg.id) },
+                            onResendMessage = { onResendMessage(msg.id) }
+                        )
                     }
                 }
             }
@@ -549,83 +416,115 @@ fun ThreadScreen(
 
         HorizontalDivider(color = colors.border, thickness = 0.5.dp)
 
-        // Composer bar
+        // Clean, Clutter-Free Composer Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(colors.surface)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // "+" Button: reveals Schedule, Quick Reply, Attachments
             Box {
                 IconButton(
-                    onClick = { showAttachMenu = true },
-                    modifier = Modifier.testTag("composer_attach_btn")
+                    onClick = { showPlusMenu = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(colors.surface2)
+                        .testTag("composer_plus_btn")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.AttachFile,
-                        contentDescription = "Attach",
-                        tint = colors.textSecondary
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "More actions",
+                        tint = colors.accent,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
                 DropdownMenu(
-                    expanded = showAttachMenu,
-                    onDismissRequest = { showAttachMenu = false }
+                    expanded = showPlusMenu,
+                    onDismissRequest = { showPlusMenu = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text("📷 Photo") },
+                        leadingIcon = {
+                            Icon(Icons.Default.FlashOn, contentDescription = null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                        },
+                        text = { Text("Quick reply") },
                         onClick = {
-                            showAttachMenu = false
+                            showPlusMenu = false
+                            showQuickReplySheet = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Default.Schedule, contentDescription = null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                        },
+                        text = { Text("Schedule SMS") },
+                        onClick = {
+                            showPlusMenu = false
+                            showScheduleDialog = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        leadingIcon = {
+                            Icon(Icons.Default.Image, contentDescription = null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                        },
+                        text = { Text("Photo") },
+                        onClick = {
+                            showPlusMenu = false
                             onSendMessage("Photo attachment", MessageType.IMAGE, "sample_uri", null, null, null, null)
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("📄 File Document") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Description, contentDescription = null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                        },
+                        text = { Text("Document") },
                         onClick = {
-                            showAttachMenu = false
-                            onSendMessage("Document attachment", MessageType.FILE, null, "Contract_Notes.pdf", "184 KB", null, null)
+                            showPlusMenu = false
+                            onSendMessage("Document attachment", MessageType.FILE, null, "Document.pdf", "140 KB", null, null)
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("👤 Contact Card") },
+                        leadingIcon = {
+                            Icon(Icons.Default.ContactPage, contentDescription = null, tint = colors.accent, modifier = Modifier.size(18.dp))
+                        },
+                        text = { Text("Contact card") },
                         onClick = {
-                            showAttachMenu = false
-                            onSendMessage("Shared Contact", MessageType.CONTACT, null, null, null, "Amina Ali", "+255 744 112 334")
+                            showPlusMenu = false
+                            onSendMessage("Contact Card", MessageType.CONTACT, null, null, null, "Contact", "+1 234 567 890")
                         }
                     )
                 }
             }
 
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Emoji toggle
             IconButton(
                 onClick = { showEmojiPicker = !showEmojiPicker },
-                modifier = Modifier.testTag("composer_emoji_btn")
+                modifier = Modifier
+                    .size(40.dp)
+                    .testTag("composer_emoji_btn")
             ) {
                 Icon(
                     imageVector = Icons.Default.Mood,
                     contentDescription = "Emoji",
-                    tint = if (showEmojiPicker) colors.accent else colors.textSecondary
+                    tint = if (showEmojiPicker) colors.accent else colors.textSecondary,
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
-            // Quick reply toggle button in composer
-            IconButton(
-                onClick = { showQuickReplies = !showQuickReplies },
-                modifier = Modifier.testTag("composer_quick_reply_toggle_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.FlashOn,
-                    contentDescription = if (showQuickReplies) "Hide Quick Replies" else "Show Quick Replies",
-                    tint = if (showQuickReplies) colors.accent else colors.textSecondary
-                )
-            }
+            Spacer(modifier = Modifier.width(4.dp))
 
+            // Message Input
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("Message (SMS)") },
+                placeholder = { Text("Message (SMS)", fontSize = 14.5.sp) },
                 maxLines = 4,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(22.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = colors.text,
                     unfocusedTextColor = colors.text,
@@ -636,30 +535,20 @@ fun ThreadScreen(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 4.dp)
                     .testTag("composer_input")
             )
 
-            IconButton(
-                onClick = { showScheduleDialog = true },
-                modifier = Modifier.testTag("composer_schedule_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Schedule,
-                    contentDescription = "Schedule SMS",
-                    tint = colors.textSecondary
-                )
-            }
+            Spacer(modifier = Modifier.width(6.dp))
 
-            // If input is empty, show Microphone for Voice note; otherwise Send button!
+            // Send or Voice Note button
             if (inputText.trim().isEmpty()) {
                 IconButton(
                     onClick = {
-                        onSendMessage("Voice note", MessageType.VOICE, null, null, "0:08", null, null)
-                        Toast.makeText(context, "Voice message sent", Toast.LENGTH_SHORT).show()
+                        onSendMessage("Voice note", MessageType.VOICE, null, null, "0:07", null, null)
+                        Toast.makeText(context, "Voice note sent", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(colors.surface2)
                         .testTag("composer_mic_btn")
@@ -682,89 +571,100 @@ fun ThreadScreen(
                         }
                     },
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(colors.accent)
                         .testTag("composer_send_btn")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
+                        contentDescription = "Send SMS",
                         tint = colors.accentText,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
         }
 
+        // Quick Reply Selection Dialog
+        if (showQuickReplySheet) {
+            val replies = remember { voxaPreferences.getQuickReplies() }
+            Dialog(onDismissRequest = { showQuickReplySheet = false }) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(colors.surface)
+                        .border(1.dp, colors.border, RoundedCornerShape(18.dp))
+                        .padding(18.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Quick Replies",
+                            color = colors.text,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        IconButton(
+                            onClick = { showQuickReplySheet = false },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(Icons.Default.Close, contentDescription = "Close", tint = colors.textSecondary)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = colors.border, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                    ) {
+                        items(replies.size) { idx ->
+                            val r = replies[idx]
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        showQuickReplySheet = false
+                                        onSendMessage(r, MessageType.TEXT, null, null, null, null, null)
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.FlashOn, contentDescription = null, tint = colors.accent, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = r,
+                                    color = colors.text,
+                                    fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            HorizontalDivider(color = colors.border.copy(alpha = 0.5f), thickness = 0.5.dp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Schedule Dialog
         if (showScheduleDialog) {
             ScheduleDialog(
                 onDismiss = { showScheduleDialog = false },
                 onConfirm = { scheduledTime ->
-                    val trimmed = inputText.trim()
-                    if (trimmed.isNotEmpty()) {
-                        onScheduleMessage(trimmed, scheduledTime)
-                        inputText = ""
-                        showScheduleDialog = false
-                    }
-                }
-            )
-        }
-
-        // Add Custom Quick Reply Dialog
-        if (showAddQuickReplyDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    showAddQuickReplyDialog = false
-                    newQuickReplyText = ""
-                },
-                title = { Text("Add Quick Reply") },
-                text = {
-                    Column {
-                        Text(
-                            text = "Add a pre-defined response chip for 1-tap fast replies in active chats.",
-                            fontSize = 13.sp,
-                            color = colors.textSecondary
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        OutlinedTextField(
-                            value = newQuickReplyText,
-                            onValueChange = { newQuickReplyText = it },
-                            placeholder = { Text("e.g. In a meeting, Talk soon...") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("add_quick_reply_input")
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val trimmed = newQuickReplyText.trim()
-                            if (trimmed.isNotEmpty()) {
-                                voxaPreferences.addQuickReply(trimmed)
-                                quickReplies = voxaPreferences.getQuickReplies()
-                                newQuickReplyText = ""
-                                showAddQuickReplyDialog = false
-                                Toast.makeText(context, "Quick reply added", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.testTag("save_quick_reply_btn")
-                    ) {
-                        Text("Add")
-                    }
-                },
-                dismissButton = {
-                    OutlinedButton(
-                        onClick = {
-                            showAddQuickReplyDialog = false
-                            newQuickReplyText = ""
-                        }
-                    ) {
-                        Text("Cancel")
-                    }
+                    val text = inputText.trim().ifEmpty { "Scheduled greeting" }
+                    onScheduleMessage(text, scheduledTime)
+                    inputText = ""
+                    showScheduleDialog = false
+                    Toast.makeText(context, "Message scheduled", Toast.LENGTH_SHORT).show()
                 }
             )
         }

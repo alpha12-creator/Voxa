@@ -14,12 +14,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -47,11 +53,23 @@ fun ArchiveScreen(
     onRestoreArchive: (Long) -> Unit,
     onToggleKeepArchived: (Long) -> Unit,
     onMoveToBin: (Long) -> Unit,
+    onToggleUnread: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
     val colors = LocalVoxaColors.current
     var selectedConvForMenu by remember { mutableStateOf<Conversation?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchOpen by remember { mutableStateOf(false) }
+
+    val filteredList = remember(conversations, searchQuery) {
+        if (searchQuery.isBlank()) conversations
+        else conversations.filter {
+            it.displayName.contains(searchQuery, ignoreCase = true) ||
+            it.number.contains(searchQuery, ignoreCase = true) ||
+            it.lastMessageText.contains(searchQuery, ignoreCase = true)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -82,6 +100,21 @@ fun ArchiveScreen(
                     .weight(1f)
                     .padding(start = 4.dp)
             )
+
+            IconButton(
+                onClick = {
+                    isSearchOpen = !isSearchOpen
+                    if (!isSearchOpen) searchQuery = ""
+                },
+                modifier = Modifier.testTag("archive_search_toggle_btn")
+            ) {
+                Icon(
+                    imageVector = if (isSearchOpen) Icons.Default.Close else Icons.Default.Search,
+                    contentDescription = "Search archive",
+                    tint = if (isSearchOpen) colors.accent else colors.textSecondary
+                )
+            }
+
             if (conversations.isNotEmpty()) {
                 Text(
                     text = "${conversations.size}",
@@ -92,6 +125,28 @@ fun ArchiveScreen(
             }
         }
 
+        if (isSearchOpen) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("Search archived conversations", fontSize = 13.5.sp) },
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = colors.text,
+                    unfocusedTextColor = colors.text,
+                    focusedBorderColor = colors.accent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = colors.surface2,
+                    unfocusedContainerColor = colors.surface2
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 4.dp)
+                    .testTag("archive_search_input")
+            )
+        }
+
         HorizontalDivider(color = colors.border, thickness = 0.5.dp)
 
         Box(
@@ -99,7 +154,7 @@ fun ArchiveScreen(
                 .weight(1f)
                 .fillMaxWidth()
         ) {
-            if (conversations.isEmpty()) {
+            if (filteredList.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -115,10 +170,19 @@ fun ArchiveScreen(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "No archived conversations.",
-                        color = colors.textSecondary,
-                        fontSize = 14.5.sp,
+                        text = if (searchQuery.isNotBlank()) "No archived conversations found" else "Your archived conversations will appear here.",
+                        color = colors.text,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (searchQuery.isNotBlank()) "Try searching for a different name or number." else "Archived conversations are removed from the Inbox without being deleted.",
+                        color = colors.textSecondary,
+                        fontSize = 13.5.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 19.sp
                     )
                 }
             } else {
@@ -127,7 +191,7 @@ fun ArchiveScreen(
                         .fillMaxSize()
                         .testTag("archive_list")
                 ) {
-                    items(conversations, key = { it.id }) { conv ->
+                    items(filteredList, key = { it.id }) { conv ->
                         ConversationItem(
                             conversation = conv,
                             onClick = { onOpenConversation(conv.id) },
@@ -144,7 +208,7 @@ fun ArchiveScreen(
                     onDismiss = { selectedConvForMenu = null },
                     onTogglePin = {},
                     onToggleMute = {},
-                    onToggleUnread = {},
+                    onToggleUnread = { onToggleUnread(conv.id) },
                     onArchive = {},
                     onRestoreArchive = { onRestoreArchive(conv.id) },
                     onToggleKeepArchived = { onToggleKeepArchived(conv.id) },

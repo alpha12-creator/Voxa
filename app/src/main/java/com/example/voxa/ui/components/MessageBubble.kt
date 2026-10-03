@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -34,15 +35,14 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,15 +73,18 @@ fun MessageBubble(
     message: Message,
     onToggleStar: () -> Unit,
     onDeleteMessage: () -> Unit,
+    onResendMessage: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val colors = LocalVoxaColors.current
     val isOut = message.dir == MessageDirection.OUT
     val isScheduled = message.status == MessageStatus.SCHEDULED
+    val isFailed = message.status == MessageStatus.FAILED
 
     var showActionDialog by remember { mutableStateOf(false) }
     var showDetailsDialog by remember { mutableStateOf(false) }
+    var showRetryDialog by remember { mutableStateOf(false) }
 
     val bubbleShape = if (isOut) {
         RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 4.dp)
@@ -91,18 +94,21 @@ fun MessageBubble(
 
     val bubbleBg = when {
         isScheduled -> Color.Transparent
+        isFailed -> colors.surface2
         isOut -> colors.accent
         else -> colors.surface2
     }
 
     val textColor = when {
         isScheduled -> colors.text
+        isFailed -> colors.text
         isOut -> colors.accentText
         else -> colors.text
     }
 
     val metaColor = when {
         isScheduled -> colors.textSecondary
+        isFailed -> colors.danger
         isOut -> colors.accentText.copy(alpha = 0.75f)
         else -> colors.textSecondary
     }
@@ -110,7 +116,7 @@ fun MessageBubble(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 3.dp),
         contentAlignment = if (isOut) Alignment.CenterEnd else Alignment.CenterStart
     ) {
         Box(
@@ -118,13 +124,21 @@ fun MessageBubble(
                 .widthIn(min = 72.dp, max = 295.dp)
                 .clip(bubbleShape)
                 .then(
-                    if (isScheduled) {
-                        Modifier.border(1.dp, colors.textSecondary, bubbleShape)
-                    } else Modifier
+                    when {
+                        isScheduled -> Modifier.border(1.dp, colors.textSecondary, bubbleShape)
+                        isFailed -> Modifier.border(1.2.dp, colors.danger, bubbleShape)
+                        else -> Modifier
+                    }
                 )
                 .background(bubbleBg)
                 .combinedClickable(
-                    onClick = { showActionDialog = true },
+                    onClick = {
+                        if (isFailed) {
+                            showRetryDialog = true
+                        } else {
+                            showActionDialog = true
+                        }
+                    },
                     onLongClick = { showActionDialog = true }
                 )
                 .padding(horizontal = 12.dp, vertical = 9.dp)
@@ -149,13 +163,13 @@ fun MessageBubble(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
-                                    .background(if (isOut) colors.surface.copy(alpha = 0.25f) else colors.accent),
+                                    .background(if (isOut && !isFailed) colors.surface.copy(alpha = 0.25f) else colors.accent),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = "Play voice message",
-                                    tint = if (isOut) textColor else colors.accentText,
+                                    contentDescription = "Play voice note",
+                                    tint = if (isOut && !isFailed) textColor else colors.accentText,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -263,13 +277,13 @@ fun MessageBubble(
                         )
                         Spacer(modifier = Modifier.width(3.dp))
                         Text(
-                            text = "Scheduled · ${SmsHelper.formatTime(message.scheduledTime ?: message.time)}",
+                            text = "Scheduled · ${SmsHelper.formatBubbleTime(message.scheduledTime ?: message.time)}",
                             color = metaColor,
                             fontSize = 10.5.sp
                         )
                     } else {
                         Text(
-                            text = SmsHelper.formatTime(message.time),
+                            text = SmsHelper.formatBubbleTime(message.time),
                             color = metaColor,
                             fontSize = 10.5.sp
                         )
@@ -279,27 +293,27 @@ fun MessageBubble(
                             Icon(
                                 imageVector = Icons.Default.Star,
                                 contentDescription = "Starred",
-                                tint = if (isOut) textColor else Color(0xFFFFB300),
+                                tint = if (isOut && !isFailed) textColor else Color(0xFFFFB300),
                                 modifier = Modifier.size(11.dp)
                             )
                         }
 
-                        // Visual status indicator (single checkmark for sent, double checkmark for delivered / read)
+                        // Status indicators for outgoing messages
                         if (isOut) {
-                            Spacer(modifier = Modifier.width(3.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             when (message.status) {
-                                MessageStatus.PENDING -> {
+                                MessageStatus.SENDING, MessageStatus.PENDING -> {
                                     Icon(
                                         imageVector = Icons.Default.Schedule,
-                                        contentDescription = "Pending",
+                                        contentDescription = "Sending SMS...",
                                         tint = metaColor,
                                         modifier = Modifier
                                             .size(11.dp)
-                                            .testTag("status_indicator_pending_${message.id}")
+                                            .testTag("status_indicator_sending_${message.id}")
                                     )
                                 }
                                 MessageStatus.SENT -> {
-                                    // Single checkmark: message sent to network
+                                    // Single checkmark: handed off to carrier
                                     Icon(
                                         imageVector = Icons.Default.Check,
                                         contentDescription = "Sent",
@@ -310,7 +324,7 @@ fun MessageBubble(
                                     )
                                 }
                                 MessageStatus.DELIVERED -> {
-                                    // Double checkmark: message delivered to recipient device
+                                    // Double checkmark: delivery confirmed by carrier delivery report
                                     Icon(
                                         imageVector = Icons.Default.DoneAll,
                                         contentDescription = "Delivered",
@@ -321,7 +335,7 @@ fun MessageBubble(
                                     )
                                 }
                                 MessageStatus.READ -> {
-                                    // Double blue checkmark: message read by recipient
+                                    // Double checkmark in blue: read by recipient
                                     Icon(
                                         imageVector = Icons.Default.DoneAll,
                                         contentDescription = "Read",
@@ -332,24 +346,46 @@ fun MessageBubble(
                                     )
                                 }
                                 MessageStatus.FAILED -> {
+                                    // Red alert exclamation mark
                                     Icon(
                                         imageVector = Icons.Default.ErrorOutline,
-                                        contentDescription = "Failed",
+                                        contentDescription = "Failed to send. Tap to retry.",
                                         tint = colors.danger,
                                         modifier = Modifier
-                                            .size(12.dp)
+                                            .size(13.dp)
                                             .testTag("status_indicator_failed_${message.id}")
                                     )
                                 }
-                                MessageStatus.SCHEDULED -> {
-                                    // handled in isScheduled branch
-                                }
+                                MessageStatus.SCHEDULED -> {}
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showRetryDialog) {
+        AlertDialog(
+            onDismissRequest = { showRetryDialog = false },
+            title = { Text("Message Not Sent") },
+            text = { Text("Message couldn't be sent. Would you like to try sending it again?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRetryDialog = false
+                        onResendMessage()
+                    }
+                ) {
+                    Text("Retry")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showRetryDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     if (showActionDialog) {
@@ -371,6 +407,19 @@ fun MessageBubble(
                 )
 
                 HorizontalDivider(color = colors.border, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 6.dp))
+
+                // Resend if failed
+                if (isFailed) {
+                    MessageActionRow(
+                        icon = Icons.Default.Replay,
+                        label = "Retry sending",
+                        tint = colors.accent,
+                        onClick = {
+                            showActionDialog = false
+                            onResendMessage()
+                        }
+                    )
+                }
 
                 // Copy
                 if (message.text.isNotBlank()) {
@@ -441,24 +490,24 @@ fun MessageBubble(
             title = { Text("Message Details") },
             text = {
                 Column {
-                    Text("Type: ${message.type.name}")
+                    Text("Type: ${message.type.name}", fontSize = 13.5.sp)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Direction: ${if (isOut) "Outgoing" else "Incoming"}")
+                    Text("Direction: ${if (isOut) "Outgoing" else "Incoming"}", fontSize = 13.5.sp)
                     Spacer(modifier = Modifier.height(4.dp))
                     val statusDesc = when (message.status) {
-                        MessageStatus.PENDING -> "Pending"
-                        MessageStatus.SENT -> "Sent (✓ Single checkmark)"
-                        MessageStatus.DELIVERED -> "Delivered (✓✓ Double checkmark)"
-                        MessageStatus.READ -> "Read (✓✓ Double blue checkmark)"
+                        MessageStatus.SENDING, MessageStatus.PENDING -> "Sending..."
+                        MessageStatus.SENT -> "Sent (✓ single checkmark)"
+                        MessageStatus.DELIVERED -> "Delivered (✓✓ double checkmark)"
+                        MessageStatus.READ -> "Read (✓✓ blue checkmark)"
                         MessageStatus.FAILED -> "Failed to send"
                         MessageStatus.SCHEDULED -> "Scheduled"
                     }
-                    Text("Status: $statusDesc")
+                    Text("Status: $statusDesc", fontSize = 13.5.sp)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("Date & Time: ${SmsHelper.formatDetailTime(message.time)}")
+                    Text("Date & Time: ${SmsHelper.formatDetailTime(message.time)}", fontSize = 13.5.sp)
                     if (message.scheduledTime != null) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text("Scheduled For: ${SmsHelper.formatDetailTime(message.scheduledTime)}")
+                        Text("Scheduled For: ${SmsHelper.formatDetailTime(message.scheduledTime)}", fontSize = 13.5.sp)
                     }
                 }
             },

@@ -158,13 +158,8 @@ class VoxaRepository private constructor(private val context: Context) {
             val conv = queryConversationById(convId) ?: return@launch
             if (conv.isBlocked) return@launch
 
-            // Attempt actual device SMS send if type == TEXT
-            if (type == MessageType.TEXT) {
-                SmsHelper.sendSms(context, conv.number, text)
-            }
-
-            // Starts with SENT status (single checkmark)
-            val status = MessageStatus.SENT
+            // State model: SENDING -> SENT -> DELIVERED, or FAILED
+            val initialStatus = if (type == MessageType.TEXT) MessageStatus.SENDING else MessageStatus.SENT
 
             val cv = ContentValues().apply {
                 put(VoxaDbHelper.COL_MSG_CONV_ID, convId)
@@ -172,7 +167,7 @@ class VoxaRepository private constructor(private val context: Context) {
                 put(VoxaDbHelper.COL_MSG_TEXT, text)
                 put(VoxaDbHelper.COL_MSG_TIME, now)
                 put(VoxaDbHelper.COL_MSG_STARRED, 0)
-                put(VoxaDbHelper.COL_MSG_STATUS, status.name)
+                put(VoxaDbHelper.COL_MSG_STATUS, initialStatus.name)
                 put(VoxaDbHelper.COL_MSG_TYPE, type.name)
                 put(VoxaDbHelper.COL_MSG_DATA_URI, dataUri)
                 put(VoxaDbHelper.COL_MSG_FILE_NAME, fileName)
@@ -208,12 +203,92 @@ class VoxaRepository private constructor(private val context: Context) {
                 loadMessages(convId)
             }
 
-            // Transition from single checkmark (SENT) to double checkmark (DELIVERED) on delivery receipt
-            scope.launch {
-                delay(1200)
-                updateMessageStatus(msgId, MessageStatus.DELIVERED)
+            // Attempt actual device SMS send if type == TEXT
+            if (type == MessageType.TEXT) {
+                val sent = SmsHelper.sendSms(context, conv.number, text, msgId)
+                if (!sent) {
+                    // System refused or immediate exception -> mark FAILED
+                    updateMessageStatus(msgId, MessageStatus.FAILED)
+                }
+                // When sent succeeds, the system will broadcast ACTION_SMS_SENT once carrier receives it,
+                // and ACTION_SMS_DELIVERED once recipient receives it. No fake delays or false ticks.
             }
         }
+    }
+
+    fun resendMessage(msgId: Long) {
+        scope.launch {
+            val msg = queryMessageById(msgId) ?: return@launch
+            val conv = queryConversationById(msg.conversationId) ?: return@launch
+            if (conv.isBlocked) return@launch
+
+            val db = getWritableDb()
+            val now = System.currentTimeMillis()
+            val cv = ContentValues().apply {
+                put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.SENDING.name)
+                put(VoxaDbHelper.COL_MSG_TIME, now)
+            }
+            db.update(VoxaDbHelper.TABLE_MESSAGES, cv, "${VoxaDbHelper.COL_MSG_ID} = ?", arrayOf(msgId.toString()))
+
+            val convCv = ContentValues().apply {
+                put(VoxaDbHelper.COL_CONV_LAST_TEXT, msg.text)
+                put(VoxaDbHelper.COL_CONV_LAST_TIME, now)
+                put(VoxaDbHelper.COL_CONV_LAST_DIR, "out")
+            }
+            db.update(VoxaDbHelper.TABLE_CONVERSATIONS, convCv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(conv.id.toString()))
+
+            refreshConversations()
+            if (activeConversationId == conv.id) {
+                loadMessages(conv.id)
+            }
+
+            val sent = SmsHelper.sendSms(context, conv.number, msg.text, msg.id)
+            if (!sent) {
+                updateMessageStatus(msgId, MessageStatus.FAILED)
+            }
+        }
+    }
+
+    fun onSmsSentSuccess(messageId: Long) {
+        scope.launch {
+            val msg = queryMessageById(messageId) ?: return@launch
+            // Transition from SENDING to SENT
+            if (msg.status == MessageStatus.SENDING) {
+                val db = getWritableDb()
+                val cv = ContentValues().apply {
+                    put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.SENT.name)
+                }
+                db.update(VoxaDbHelper.TABLE_MESSAGES, cv, "${VoxaDbHelper.COL_MSG_ID} = ?", arrayOf(messageId.toString()))
+                activeConversationId?.let { loadMessages(it) }
+            }
+        }
+    }
+
+    fun onSmsSentFailed(messageId: Long, resultCode: Int) {
+        scope.launch {
+            val db = getWritableDb()
+            val cv = ContentValues().apply {
+                put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.FAILED.name)
+            }
+            db.update(VoxaDbHelper.TABLE_MESSAGES, cv, "${VoxaDbHelper.COL_MSG_ID} = ?", arrayOf(messageId.toString()))
+            activeConversationId?.let { loadMessages(it) }
+        }
+    }
+
+    fun onSmsDeliveredSuccess(messageId: Long) {
+        scope.launch {
+            val db = getWritableDb()
+            val cv = ContentValues().apply {
+                put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.DELIVERED.name)
+            }
+            db.update(VoxaDbHelper.TABLE_MESSAGES, cv, "${VoxaDbHelper.COL_MSG_ID} = ?", arrayOf(messageId.toString()))
+            activeConversationId?.let { loadMessages(it) }
+        }
+    }
+
+    fun onSmsDeliveredFailed(messageId: Long, resultCode: Int) {
+        // As per specification: If the message is SENT but no delivery confirmation arrives, keep it as SENT.
+        // Do NOT convert to DELIVERED or falsely to FAILED unless there is an actual confirmed send failure.
     }
 
     fun scheduleMessage(convId: Long, text: String, scheduledTime: Long) {
@@ -250,6 +325,63 @@ class VoxaRepository private constructor(private val context: Context) {
         }
     }
 
+    suspend fun getScheduledMessages(): List<Pair<Conversation, Message>> = withContext(Dispatchers.IO) {
+        val db = getReadableDb()
+        val list = mutableListOf<Pair<Conversation, Message>>()
+        val query = """
+            SELECT m.*, c.name, c.number, c.is_archived, c.is_deleted
+            FROM ${VoxaDbHelper.TABLE_MESSAGES} m
+            JOIN ${VoxaDbHelper.TABLE_CONVERSATIONS} c ON m.${VoxaDbHelper.COL_MSG_CONV_ID} = c.${VoxaDbHelper.COL_CONV_ID}
+            WHERE m.${VoxaDbHelper.COL_MSG_STATUS} = '${MessageStatus.SCHEDULED.name}'
+            ORDER BY m.${VoxaDbHelper.COL_MSG_SCHEDULED_TIME} ASC
+        """.trimIndent()
+        val cursor = db.rawQuery(query, null)
+        cursor.use {
+            while (it.moveToNext()) {
+                val msg = it.toMessage()
+                val conv = Conversation(
+                    id = msg.conversationId,
+                    name = it.getString(it.getColumnIndexOrThrow("name")),
+                    number = it.getString(it.getColumnIndexOrThrow("number")),
+                    isArchived = it.getInt(it.getColumnIndexOrThrow("is_archived")) == 1,
+                    isDeleted = it.getInt(it.getColumnIndexOrThrow("is_deleted")) == 1
+                )
+                list.add(conv to msg)
+            }
+        }
+        list
+    }
+
+    fun sendScheduledMessageNow(msgId: Long) {
+        scope.launch {
+            val msg = queryMessageById(msgId) ?: return@launch
+            val conv = queryConversationById(msg.conversationId) ?: return@launch
+            val now = System.currentTimeMillis()
+            val db = getWritableDb()
+            val cv = ContentValues().apply {
+                put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.SENDING.name)
+                put(VoxaDbHelper.COL_MSG_TIME, now)
+                putNull(VoxaDbHelper.COL_MSG_SCHEDULED_TIME)
+            }
+            db.update(VoxaDbHelper.TABLE_MESSAGES, cv, "${VoxaDbHelper.COL_MSG_ID} = ?", arrayOf(msgId.toString()))
+
+            val convCv = ContentValues().apply {
+                put(VoxaDbHelper.COL_CONV_LAST_TEXT, msg.text)
+                put(VoxaDbHelper.COL_CONV_LAST_TIME, now)
+                put(VoxaDbHelper.COL_CONV_LAST_DIR, "out")
+            }
+            db.update(VoxaDbHelper.TABLE_CONVERSATIONS, convCv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(conv.id.toString()))
+
+            refreshConversations()
+            activeConversationId?.let { loadMessages(it) }
+
+            val ok = SmsHelper.sendSms(context, conv.number, msg.text, msg.id)
+            if (!ok) {
+                updateMessageStatus(msgId, MessageStatus.FAILED)
+            }
+        }
+    }
+
     fun checkScheduledMessages() {
         scope.launch {
             val db = getWritableDb()
@@ -273,11 +405,8 @@ class VoxaRepository private constructor(private val context: Context) {
             if (due.isNotEmpty()) {
                 due.forEach { msg ->
                     val conv = queryConversationById(msg.conversationId)
-                    if (conv != null && !conv.isBlocked) {
-                        SmsHelper.sendSms(context, conv.number, msg.text)
-                    }
                     val cv = ContentValues().apply {
-                        put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.SENT.name)
+                        put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.SENDING.name)
                         put(VoxaDbHelper.COL_MSG_TIME, now)
                         putNull(VoxaDbHelper.COL_MSG_SCHEDULED_TIME)
                     }
@@ -287,6 +416,21 @@ class VoxaRepository private constructor(private val context: Context) {
                         "${VoxaDbHelper.COL_MSG_ID} = ?",
                         arrayOf(msg.id.toString())
                     )
+
+                    if (conv != null && !conv.isBlocked) {
+                        val sent = SmsHelper.sendSms(context, conv.number, msg.text, msg.id)
+                        if (!sent) {
+                            val failCv = ContentValues().apply {
+                                put(VoxaDbHelper.COL_MSG_STATUS, MessageStatus.FAILED.name)
+                            }
+                            db.update(
+                                VoxaDbHelper.TABLE_MESSAGES,
+                                failCv,
+                                "${VoxaDbHelper.COL_MSG_ID} = ?",
+                                arrayOf(msg.id.toString())
+                            )
+                        }
+                    }
                 }
                 refreshConversations()
                 activeConversationId?.let { loadMessages(it) }
@@ -317,8 +461,12 @@ class VoxaRepository private constructor(private val context: Context) {
             }
             db.insert(VoxaDbHelper.TABLE_MESSAGES, null, cv)
 
-            // Update conversation: un-archive if not keepArchived
+            // Update conversation: un-archive if not keepArchived and not keepArchivedByDefault
             val isCurrentOpen = activeConversationId == conv.id
+            val preferences = com.example.voxa.data.preferences.VoxaPreferences(context)
+            val keepArchivedDefault = preferences.settings.value.keepArchivedByDefault
+            val shouldUnarchive = conv.isArchived && !conv.keepArchived && !keepArchivedDefault
+
             val convCv = ContentValues().apply {
                 put(VoxaDbHelper.COL_CONV_LAST_TEXT, messageText)
                 put(VoxaDbHelper.COL_CONV_LAST_TIME, timestamp)
@@ -326,7 +474,7 @@ class VoxaRepository private constructor(private val context: Context) {
                 if (!isCurrentOpen) {
                     put(VoxaDbHelper.COL_CONV_UNREAD, 1)
                 }
-                if (conv.isArchived && !conv.keepArchived) {
+                if (shouldUnarchive) {
                     put(VoxaDbHelper.COL_CONV_ARCHIVED, 0)
                 }
             }
@@ -485,6 +633,98 @@ class VoxaRepository private constructor(private val context: Context) {
         }
     }
 
+    fun archiveMultiple(ids: List<Long>) {
+        scope.launch {
+            val db = getWritableDb()
+            for (id in ids) {
+                val cv = ContentValues().apply { put(VoxaDbHelper.COL_CONV_ARCHIVED, 1) }
+                db.update(VoxaDbHelper.TABLE_CONVERSATIONS, cv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(id.toString()))
+            }
+            refreshConversations()
+        }
+    }
+
+    fun moveToBinMultiple(ids: List<Long>) {
+        scope.launch {
+            val db = getWritableDb()
+            val now = System.currentTimeMillis()
+            for (id in ids) {
+                val cv = ContentValues().apply {
+                    put(VoxaDbHelper.COL_CONV_DELETED, 1)
+                    put(VoxaDbHelper.COL_CONV_DELETED_AT, now)
+                }
+                db.update(VoxaDbHelper.TABLE_CONVERSATIONS, cv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(id.toString()))
+            }
+            refreshConversations()
+        }
+    }
+
+    fun restoreFromBinMultiple(ids: List<Long>) {
+        scope.launch {
+            val db = getWritableDb()
+            for (id in ids) {
+                val cv = ContentValues().apply {
+                    put(VoxaDbHelper.COL_CONV_DELETED, 0)
+                    put(VoxaDbHelper.COL_CONV_ARCHIVED, 0)
+                    putNull(VoxaDbHelper.COL_CONV_DELETED_AT)
+                }
+                db.update(VoxaDbHelper.TABLE_CONVERSATIONS, cv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(id.toString()))
+            }
+            refreshConversations()
+        }
+    }
+
+    fun deletePermanentlyMultiple(ids: List<Long>) {
+        scope.launch {
+            val db = getWritableDb()
+            for (id in ids) {
+                db.delete(VoxaDbHelper.TABLE_MESSAGES, "${VoxaDbHelper.COL_MSG_CONV_ID} = ?", arrayOf(id.toString()))
+                db.delete(VoxaDbHelper.TABLE_CONVERSATIONS, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(id.toString()))
+            }
+            refreshConversations()
+        }
+    }
+
+    fun markMultipleAsRead(ids: List<Long>) {
+        scope.launch {
+            val db = getWritableDb()
+            for (id in ids) {
+                val cv = ContentValues().apply { put(VoxaDbHelper.COL_CONV_UNREAD, 0) }
+                db.update(VoxaDbHelper.TABLE_CONVERSATIONS, cv, "${VoxaDbHelper.COL_CONV_ID} = ?", arrayOf(id.toString()))
+            }
+            refreshConversations()
+        }
+    }
+
+    suspend fun searchMessagesContent(query: String): List<Pair<Conversation, Message>> = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext emptyList()
+        val db = getReadableDb()
+        val list = mutableListOf<Pair<Conversation, Message>>()
+        val sql = """
+            SELECT m.*, c.name, c.number, c.is_archived, c.is_deleted
+            FROM ${VoxaDbHelper.TABLE_MESSAGES} m
+            JOIN ${VoxaDbHelper.TABLE_CONVERSATIONS} c ON m.${VoxaDbHelper.COL_MSG_CONV_ID} = c.${VoxaDbHelper.COL_CONV_ID}
+            WHERE m.${VoxaDbHelper.COL_MSG_TEXT} LIKE ? AND c.${VoxaDbHelper.COL_CONV_DELETED} = 0
+            ORDER BY m.${VoxaDbHelper.COL_MSG_TIME} DESC
+            LIMIT 50
+        """.trimIndent()
+        val cursor = db.rawQuery(sql, arrayOf("%$query%"))
+        cursor.use {
+            while (it.moveToNext()) {
+                val msg = it.toMessage()
+                val conv = Conversation(
+                    id = msg.conversationId,
+                    name = it.getString(it.getColumnIndexOrThrow("name")),
+                    number = it.getString(it.getColumnIndexOrThrow("number")),
+                    isArchived = it.getInt(it.getColumnIndexOrThrow("is_archived")) == 1,
+                    isDeleted = it.getInt(it.getColumnIndexOrThrow("is_deleted")) == 1
+                )
+                list.add(conv to msg)
+            }
+        }
+        list
+    }
+
     fun purgeOldBinConversations(retentionDays: Int) {
         scope.launch {
             val db = getWritableDb()
@@ -549,6 +789,10 @@ class VoxaRepository private constructor(private val context: Context) {
             }
             refreshConversations()
         }
+    }
+
+    fun cancelScheduledMessage(msgId: Long, convId: Long) {
+        deleteMessage(msgId, convId)
     }
 
     fun deleteMessage(msgId: Long, convId: Long) {
@@ -691,7 +935,10 @@ class VoxaRepository private constructor(private val context: Context) {
         text = getString(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_TEXT)),
         time = getLong(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_TIME)),
         isStarred = getInt(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_STARRED)) == 1,
-        status = runCatching { MessageStatus.valueOf(getString(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_STATUS))) }.getOrDefault(MessageStatus.SENT),
+        status = runCatching {
+            val s = getString(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_STATUS))
+            if (s == "PENDING") MessageStatus.SENDING else MessageStatus.valueOf(s)
+        }.getOrDefault(MessageStatus.SENT),
         scheduledTime = if (isNull(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_SCHEDULED_TIME))) null else getLong(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_SCHEDULED_TIME)),
         type = runCatching { MessageType.valueOf(getString(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_TYPE))) }.getOrDefault(MessageType.TEXT),
         dataUri = getString(getColumnIndexOrThrow(VoxaDbHelper.COL_MSG_DATA_URI)),

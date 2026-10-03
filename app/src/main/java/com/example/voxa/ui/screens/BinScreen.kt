@@ -16,8 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -54,12 +58,18 @@ fun BinScreen(
     onRestoreFromBin: (Long) -> Unit,
     onDeletePermanently: (Long) -> Unit,
     onEmptyBin: () -> Unit,
+    onRestoreSelected: (List<Long>) -> Unit = {},
+    onDeletePermanentlySelected: (List<Long>) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
     val colors = LocalVoxaColors.current
     var selectedConvForMenu by remember { mutableStateOf<Conversation?>(null) }
     var showEmptyBinConfirm by remember { mutableStateOf(false) }
+    var showDeleteSelectedConfirm by remember { mutableStateOf(false) }
+
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    val isSelectionMode = selectedIds.isNotEmpty()
 
     if (showEmptyBinConfirm) {
         AlertDialog(
@@ -85,74 +95,138 @@ fun BinScreen(
         )
     }
 
+    if (showDeleteSelectedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteSelectedConfirm = false },
+            title = { Text("Delete Permanently?") },
+            text = { Text("Permanently delete ${selectedIds.size} conversations? This cannot be undone.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteSelectedConfirm = false
+                        onDeletePermanentlySelected(selectedIds.toList())
+                        selectedIds = emptySet()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colors.danger, contentColor = Color.White)
+                ) {
+                    Text("Delete Permanently")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showDeleteSelectedConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(colors.bg)
     ) {
-        // Top App Bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(colors.surface)
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack, modifier = Modifier.testTag("bin_back_btn")) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = colors.text
-                )
-            }
-            Text(
-                text = "Bin",
-                color = colors.text,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp)
-            )
-            if (conversations.isNotEmpty()) {
-                TextButton(
-                    onClick = { showEmptyBinConfirm = true },
-                    modifier = Modifier.testTag("empty_bin_top_btn")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = "Empty Bin",
-                        tint = colors.danger,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.size(4.dp))
-                    Text(
-                        text = "Empty",
-                        color = colors.danger,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider(color = colors.border, thickness = 0.5.dp)
-
-        if (conversations.isNotEmpty()) {
+        if (isSelectionMode) {
+            // Selection Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(colors.surface2)
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                    .background(colors.surface)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(onClick = { selectedIds = emptySet() }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear selection", tint = colors.text)
+                }
+
                 Text(
-                    text = "Items in Bin are auto-deleted after $retentionDays days",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp
+                    text = "${selectedIds.size} selected",
+                    color = colors.text,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
+
+                IconButton(onClick = { selectedIds = conversations.map { it.id }.toSet() }) {
+                    Icon(Icons.Default.SelectAll, contentDescription = "Select all", tint = colors.textSecondary)
+                }
+
+                IconButton(onClick = {
+                    onRestoreSelected(selectedIds.toList())
+                    selectedIds = emptySet()
+                }) {
+                    Icon(Icons.Default.Restore, contentDescription = "Restore selected", tint = colors.accent)
+                }
+
+                IconButton(onClick = { showDeleteSelectedConfirm = true }) {
+                    Icon(Icons.Default.DeleteForever, contentDescription = "Delete permanently", tint = colors.danger)
+                }
             }
             HorizontalDivider(color = colors.border, thickness = 0.5.dp)
+        } else {
+            // Top App Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.surface)
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.testTag("bin_back_btn")) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = colors.text
+                    )
+                }
+                Text(
+                    text = "Bin",
+                    color = colors.text,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 4.dp)
+                )
+                if (conversations.isNotEmpty()) {
+                    TextButton(
+                        onClick = { showEmptyBinConfirm = true },
+                        modifier = Modifier.testTag("empty_bin_top_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteSweep,
+                            contentDescription = "Empty Bin",
+                            tint = colors.danger,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.size(4.dp))
+                        Text(
+                            text = "Empty",
+                            color = colors.danger,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider(color = colors.border, thickness = 0.5.dp)
+
+            if (conversations.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(colors.surface2)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Items in Bin are auto-deleted after $retentionDays days",
+                        color = colors.textSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+                HorizontalDivider(color = colors.border, thickness = 0.5.dp)
+            }
         }
 
         Box(
@@ -176,10 +250,19 @@ fun BinScreen(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Your bin is empty.",
-                        color = colors.textSecondary,
-                        fontSize = 14.5.sp,
+                        text = "Bin is empty",
+                        color = colors.text,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Deleted conversations will appear here before being permanently removed.",
+                        color = colors.textSecondary,
+                        fontSize = 13.5.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 19.sp
                     )
                 }
             } else {
@@ -189,10 +272,21 @@ fun BinScreen(
                         .testTag("bin_list")
                 ) {
                     items(conversations, key = { it.id }) { conv ->
+                        val isSelected = selectedIds.contains(conv.id)
                         ConversationItem(
                             conversation = conv,
-                            onClick = { selectedConvForMenu = conv },
-                            onLongClick = { selectedConvForMenu = conv }
+                            onClick = {
+                                if (isSelectionMode) {
+                                    selectedIds = if (isSelected) selectedIds - conv.id else selectedIds + conv.id
+                                } else {
+                                    selectedConvForMenu = conv
+                                }
+                            },
+                            onLongClick = {
+                                selectedIds = if (isSelected) selectedIds - conv.id else selectedIds + conv.id
+                            },
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected
                         )
                     }
                 }
@@ -212,7 +306,10 @@ fun BinScreen(
                     onMoveToBin = {},
                     onRestoreFromBin = { onRestoreFromBin(conv.id) },
                     onDeletePermanently = { onDeletePermanently(conv.id) },
-                    onToggleBlock = {}
+                    onToggleBlock = {},
+                    onSelectMultiple = {
+                        selectedIds = selectedIds + conv.id
+                    }
                 )
             }
         }
